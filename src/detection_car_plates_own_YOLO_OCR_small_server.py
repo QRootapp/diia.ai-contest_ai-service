@@ -34,15 +34,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# Налаштування CORS для інтеграції з фронтендом
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # У production вкажіть конкретні домени
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 
 # --- ДОПОМІЖНІ ФУНКЦІЇ (ІДЕНТИЧНІ ДО ОРИГІНАЛЬНОГО ФАЙЛУ) ---
 
@@ -112,92 +103,21 @@ def detect_license_plate(img, yolo, ocr):
     return {"cars": detected_cars}
 
 
-# --- API ЕНДПОІНТИ ---
-
-@app.get("/", response_class=HTMLResponse)
-async def root():
-    """Проста HTML сторінка для тестування API"""
-    return """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Детекція номерних знаків</title>
-        <meta charset="utf-8">
-        <style>
-            body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
-            h1 { color: #333; }
-            input[type="file"] { margin: 20px 0; }
-            button { background: #4CAF50; color: white; padding: 10px 20px; border: none; cursor: pointer; font-size: 16px; }
-            button:hover { background: #45a049; }
-            #result { margin-top: 20px; padding: 15px; background: #f5f5f5; border-radius: 5px; white-space: pre-wrap; }
-        </style>
-    </head>
-    <body>
-        <h1>Детекція номерних знаків</h1>
-        <form id="uploadForm">
-            <input type="file" id="imageFile" accept="image/*" required>
-            <br>
-            <button type="submit">Відправити на обробку</button>
-        </form>
-        <div id="result"></div>
-        <script>
-            document.getElementById('uploadForm').addEventListener('submit', async (e) => {
-                e.preventDefault();
-                const fileInput = document.getElementById('imageFile');
-                const resultDiv = document.getElementById('result');
-                
-                if (!fileInput.files[0]) {
-                    resultDiv.textContent = 'Будь ласка, виберіть файл';
-                    return;
-                }
-                
-                const formData = new FormData();
-                formData.append('file', fileInput.files[0]);
-                
-                resultDiv.textContent = 'Обробка...';
-                
-                try {
-                    const response = await fetch('/detect', {
-                        method: 'POST',
-                        body: formData
-                    });
-                    
-                    const data = await response.json();
-                    resultDiv.textContent = JSON.stringify(data, null, 2);
-                } catch (error) {
-                    resultDiv.textContent = 'Помилка: ' + error.message;
-                }
-            });
-        </script>
-    </body>
-    </html>
-    """
-
-
-@app.get("/health")
-async def health_check():
-    """Перевірка стану сервера"""
-    return {"status": "ok", "message": "Сервер працює"}
-
+# --- API ЕНДПОІНТ ---
 
 @app.post("/detect")
 async def detect_license_plate_endpoint(file: UploadFile = File(...)):
     """
     Ендпоінт для обробки зображення та детекції номерних знаків.
     Отримує файл через HTTP POST, обробляє його та повертає JSON.
-    
-    Файл передається через multipart/form-data (form data), а не raw binary.
-    FastAPI автоматично парсить multipart/form-data і надає доступ через UploadFile.
     """
     # Перевірка формату
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(status_code=400, detail="Файл має бути зображенням")
 
     try:
-        # Читання бінарних даних з form data (multipart/form-data)
-        # file.read() повертає bytes - бінарні дані файлу
+        # Читання файлу в пам'ять
         contents = await file.read()
-        # Конвертуємо bytes в numpy array для OpenCV
         nparr = np.frombuffer(contents, np.uint8)
 
         # Декодування в OpenCV формат
