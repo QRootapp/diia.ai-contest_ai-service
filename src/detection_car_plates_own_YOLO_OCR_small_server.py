@@ -21,13 +21,8 @@ async def lifespan(app: FastAPI):
         # Шляхи до файлів моделей
         models["yolo"] = YOLO('train_models/YOLO/my_YOLO_detection_car_plates.pt')
 
-        # Ініціалізація PaddleOCR
-        models["ocr"] = PaddleOCR(
-            use_angle_cls=True,
-            lang='en',
-            # Шлях до кастомної моделі OCR (якщо використовується)
-            text_recognition_model_dir='train_models/OCR'
-        )
+        # Ініціалізація PaddleOCR (як в оригінальному файлі)
+        models["ocr"] = PaddleOCR(text_recognition_model_dir='train_models/OCR')
         print("Моделі успішно завантажено.")
     except Exception as e:
         print(f"Помилка завантаження моделей: {e}")
@@ -59,20 +54,15 @@ def correct_plate_text(text):
     if not text or len(text) < 3:
         return ""
     chars = list(text)
-
-    # Базова корекція символів
-    if len(chars) >= 8:
+    if len(chars) == 8:
         for i in [0, 1, 6, 7]:  # літери
-            if i < len(chars):
-                if chars[i] == '0': chars[i] = 'O'
-                if chars[i] == '1': chars[i] = 'I'
-                if chars[i] == '8': chars[i] = 'B'
+            if chars[i] == '0': chars[i] = 'O'
+            if chars[i] == '1': chars[i] = 'I'
+            if chars[i] == '8': chars[i] = 'B'
         for i in range(2, 6):  # цифри
-            if i < len(chars):
-                if chars[i] == 'O': chars[i] = '0'
-                if chars[i] == 'I': chars[i] = '1'
-                if chars[i] == 'B': chars[i] = '8'
-
+            if chars[i] == 'O': chars[i] = '0'
+            if chars[i] == 'I': chars[i] = '1'
+            if chars[i] == 'B': chars[i] = '8'
     text = ''.join(chars)
     if re.match(standard_pattern, text):
         return text
@@ -92,45 +82,29 @@ def process_image_logic(img, yolo, ocr):
     for result in results:
         for box in result.boxes:
             x1, y1, x2, y2 = map(int, box.xyxy[0])
-
-            # Валідація координат
-            h_img, w_img = img.shape[:2]
-            x1, y1 = max(0, x1), max(0, y1)
-            x2, y2 = min(w_img, x2), min(h_img, y2)
-
             crop = img[y1:y2, x1:x2]
-
-            # Пропускаємо дуже малі обрізки
-            if crop.shape[0] < 5 or crop.shape[1] < 5:
-                continue
-
             crop = preprocess_plate_image(crop)
 
-            # 2. Розпізнавання тексту через PaddleOCR
-            ocr_result = ocr.ocr(crop, cls=False)
-
+            # 2. Розпізнавання тексту через PaddleOCR (використовуємо predict як в оригіналі)
+            ocr_out = ocr.predict(crop)
             fragments = []
-            if ocr_result and ocr_result[0]:
-                for line in ocr_result[0]:
-                    # line: [[coords], (text, confidence)]
-                    txt = line[1][0]
-                    score = line[1][1]
-
-                    if score > 0.3:
+            if ocr_out and isinstance(ocr_out, list):
+                rec = ocr_out[0]
+                texts = rec.get('rec_texts', [])
+                scores = rec.get('rec_scores', [])
+                for txt, score in zip(texts, scores):
+                    if txt and score > 0.3:
                         fragments.append({"text": txt, "confidence": score})
 
             if fragments:
                 raw_text = " ".join(f["text"] for f in fragments)
                 confidence = sum(f["confidence"] for f in fragments) / len(fragments)
-
                 corrected = correct_plate_text(raw_text)
-
                 if corrected and len(corrected) >= 5:
                     detected_cars.append({
                         "plate": corrected,
                         "raw_text": raw_text,
-                        "confidence": round(confidence * 100, 1),
-                        "bbox": [x1, y1, x2, y2]
+                        "confidence": round(confidence * 100, 1)
                     })
 
     return {"cars": detected_cars}
@@ -150,3 +124,25 @@ async def detect_license_plate_endpoint(file: UploadFile = File(...)):
         nparr = np.frombuffer(contents, np.uint8)
 
         # 3. Декодування в OpenCV формат
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if img is None:
+            raise HTTPException(status_code=400, detail="Не вдалося декодувати зображення")
+
+        # 4. Перевірка що моделі завантажені
+        if "yolo" not in models or "ocr" not in models:
+            raise HTTPException(status_code=503, detail="Моделі не завантажені")
+
+        # 5. Обробка зображення
+        result = process_image_logic(img, models["yolo"], models["ocr"])
+        
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Помилка обробки зображення: {str(e)}")
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
