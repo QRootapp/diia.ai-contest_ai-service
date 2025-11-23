@@ -1,6 +1,5 @@
 Global:
   model_name: PP-OCRv5_server_rec
-  character_dict_path: ukr_plates_dict.txt
   Hpi:
   backend_configs:
     paddle_infer:
